@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="km">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title data-i18n="title">ខ្លាឃ្លោក - Kla Klouk Game</title>
+    
+
+<script src="https://cdn.tailwindcss.com"></script>
+    
+
+<script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // Set Firestore log level to Debug
+        setLogLevel('debug');
+
+        // Make necessary Firestore functions available globally for the main script
+        window.doc = doc;
+        window.getDoc = getDoc;
+        window.setDoc = setDoc;
+
+        // Global variables provided by the environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let app, db, auth, userId;
+        let isAuthReady = false;
+
+        // Make Firebase instances available globally for the main script
+        window.firebaseData = {
+            db: null,
+            userId: null,
+            isAuthReady: false,
+            appId: appId
+        };
+
+        // --- Firebase Initialization and Authentication ---
+        async function initializeFirebase() {
+            if (!firebaseConfig) {
+                console.error("Firebase config is missing.");
+                return;
+            }
+
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+            
+            // 1. Sign In
+            try {
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Firebase Authentication failed:", error);
+            }
+
+            // 2. Set up Auth State Listener
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    userId = user.uid;
+                    isAuthReady = true;
+                    console.log("Firebase Auth Ready. User ID:", userId);
+
+                    // Update global access object
+                    window.firebaseData.db = db;
+                    window.firebaseData.userId = userId;
+                    window.firebaseData.isAuthReady = isAuthReady;
+
+                    // Trigger the main game logic to start loading balance
+                    if (window.loadGameBalance) {
+                        window.loadGameBalance();
+                    }
+                } else {
+                    // This block handles the initial state (before sign-in) or sign-out
+                    isAuthReady = true;
+                    userId = crypto.randomUUID(); // Fallback ID for unauthenticated state
+                    window.firebaseData.isAuthReady = isAuthReady;
+                    window.firebaseData.userId = userId;
+                    window.firebaseData.db = db;
+                    
+                    // If anonymous sign-in failed, still try to load with fallback ID
+                    if (window.loadGameBalance) {
+                        window.loadGameBalance();
+                    }
+                    console.log("Signed out or using fallback ID:", userId);
+                }
+            });
+        }
+        
+        initializeFirebase();
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Bayon&family=Inter:wght@400;700&display=swap');
+        
+        body {
+            /* Default to Inter for Latin text, Bayon for Khmer */
+            font-family: 'Inter', 'Bayon', sans-serif;
+            background: linear-gradient(to bottom right, #6EE7B7, #34D399); /* Bright, fun gradient */
+            color: #1a202c; /* Darker text for contrast on light background */
+        }
+        .text-khmer {
+             font-family: 'Bayon', sans-serif;
+        }
+        .card-shadow {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.2);
+        }
+        .slot-animation {
+            /* Custom spinning animation for the result slots */
+            animation: spin 0.1s infinite linear;
+        }
+        @keyframes spin {
+            from { transform: translateY(0); }
+            to { transform: translateY(-100%); }
+        }
+        /* Style for the bet input to hide default arrows */
+        input[type='number']::-webkit-inner-spin-button, 
+        input[type='number']::-webkit-outer-spin-button { 
+          -webkit-appearance: none; 
+          margin: 0; 
+        }
+    </style>
+</head>
+<body class="min-h-screen p-4 flex items-center justify-center">
+
+    
+
+<div id="game-container" class="w-full max-w-4xl bg-gradient-to-br from-blue-700 to-indigo-900 text-white rounded-xl p-6 md:p-10 card-shadow border-4 border-yellow-300">
+        
+        <div class="flex justify-between items-start mb-6">
+            <h1 data-i18n="title" class="text-3xl md:text-5xl font-bold text-yellow-300 text-khmer self-center w-full text-center">ល្បែង ខ្លាឃ្លោក (Kla Klouk)</h1>
+            
+            
+
+<div class="flex space-x-2 absolute top-4 right-4 md:static md:ml-4">
+                <button onclick="setLanguage('km')" class="p-2 rounded-full bg-gray-700 hover:bg-gray-600 transition duration-150 text-2xl" id="lang-km-btn">
+                    🇰🇭
+                </button>
+                <button onclick="setLanguage('en')" class="p-2 rounded-full bg-gray-700 hover:bg-gray-600 transition duration-150 text-2xl" id="lang-en-btn">
+                    🇺🇸
+                </button>
+            </div>
+        </div>
+
+
+        <!-- Header: Balance, Add Credit Button, and User ID -->
+        <div class="flex flex-col md:flex-row justify-between items-center mb-6 p-4 bg-blue-800 rounded-lg border-b-2 border-yellow-400">
+            <div class="flex flex-col sm:flex-row items-center space-y-2 sm:space-y-0 sm:space-x-4">
+                <div class="text-lg md:text-xl text-yellow-300 whitespace-nowrap">
+                    <span data-i18n="balance" class="text-khmer">សមតុល្យ</span>: 
+                    <span id="balance-display" class="font-extrabold text-2xl text-white">០ កាក</span>
+                </div>
+                <!-- Add Credit Button -->
+                <button id="add-credit-button" data-i18n="add_credit_button" class="px-3 py-1 bg-teal-500 hover:bg-teal-600 text-white font-bold rounded-lg text-sm sm:text-base transition duration-200 text-khmer shadow-md whitespace-nowrap">
+                    បន្ថែម កាក
+                </button>
+            </div>
+            <div class="text-xs text-gray-300 mt-2 md:mt-0">
+                <span data-i18n="player_id">លេខសម្គាល់អ្នកលេង</span>: 
+                <span id="user-id-display">...</span>
+            </div>
+        </div>
+
+        
+
+<div class="flex justify-center items-center space-x-2 sm:space-x-4 mb-8">
+            <div id="slot-1" class="w-16 h-16 sm:w-24 sm:h-24 md:w-28 md:h-28 bg-blue-600 rounded-xl flex items-center justify-center text-4xl md:text-6xl overflow-hidden border-4 border-white">
+                <div class="slot-content text-khmer">?</div>
+            </div>
+            <div id="slot-2" class="w-16 h-16 sm:w-24 sm:h-24 md:w-28 md:h-28 bg-blue-600 rounded-xl flex items-center justify-center text-4xl md:text-6xl overflow-hidden border-4 border-white">
+                <div class="slot-content text-khmer">?</div>
+            </div>
+            <div id="slot-3" class="w-16 h-16 sm:w-24 sm:h-24 md:w-28 md:h-28 bg-blue-600 rounded-xl flex items-center justify-center text-4xl md:text-6xl overflow-hidden border-4 border-white">
+                <div class="slot-content text-khmer">?</div>
+            </div>
+        </div>
+
+        
+
+<div class="flex flex-col items-center justify-center space-y-4 mb-8">
+            <div id="message-box" class="min-h-8 text-center text-xl font-semibold text-white">
+                <span data-i18n="initial_message" class="text-khmer">សូមដាក់ភ្នាល់របស់អ្នក</span>
+            </div>
+            
+            <div class="flex space-x-4">
+                <button id="roll-button" data-i18n="roll_button" class="px-6 sm:px-8 py-3 bg-red-500 hover:bg-red-600 text-white font-bold rounded-lg shadow-lg transition duration-200 disabled:opacity-50 text-lg sm:text-xl text-khmer">
+                    ក្រឡុក!
+                </button>
+                <button id="clear-bets-button" data-i18n="clear_bets" class="px-4 sm:px-6 py-3 bg-gray-500 hover:bg-gray-600 text-white rounded-lg shadow-md transition duration-200 disabled:opacity-50 text-lg sm:text-xl text-khmer">
+                    លុប​ការ​ភ្នាល់
+                </button>
+            </div>
+        </div>
+
+        
+
+<div id="betting-grid" class="grid grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
+            
+
+</div>
+
+    </div>
+
+    
+
+<div id="modal-container" class="hidden fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 p-6 sm:p-8 rounded-xl shadow-2xl w-full max-w-sm text-center border-4 border-red-500">
+            <p id="modal-message" class="text-lg sm:text-xl font-bold mb-4 text-white text-khmer"></p>
+            <button id="modal-close-button" data-i18n="modal_ok" class="px-6 py-2 bg-yellow-500 hover:bg-yellow-600 text-gray-900 rounded-lg font-semibold text-khmer">
+                យល់ព្រម
+            </button>
+        </div>
+    </div>
+
+
+<script>
+    // --- I18N (Internationalization) Setup ---
+    let currentLang = localStorage.getItem('klaklouk-lang') || 'km'; // Default to Khmer
+
+    const translations = {
+        'title': { km: 'ល្បែង ខ្លាឃ្លោក (Kla Klouk)', en: 'Kla Klouk Game (Dice Game)' },
+        'balance': { km: 'សមតុល្យ', en: 'Balance' },
+        'player_id': { km: 'លេខសម្គាល់អ្នកលេង', en: 'Player ID' },
+        'initial_message': { km: 'សូមដាក់ភ្នាល់របស់អ្នក', en: 'Place Your Bet' },
+        'roll_button': { km: 'ក្រឡុក!', en: 'Roll!' },
+        'clear_bets': { km: 'លុប​ការ​ភ្នាល់', en: 'Clear Bets' },
+        'bet_label': { km: 'ភ្នាល់', en: 'Bet' },
+        // Symbols (KM name is the key for easy lookup)
+        'ខ្លា': { km: 'ខ្លា', en: 'Tiger' },
+        'ឃ្លោក': { km: 'ឃ្លោក', en: 'Gourd' },
+        'មាន់': { km: 'មាន់', en: 'Chicken' },
+        'បង្កង': { km: 'បង្កង', en: 'Prawn' },
+        'ក្តាម': { km: 'ក្តាម', en: 'Crab' },
+        'ត្រី': { km: 'ត្រី', en: 'Fish' },
+        // Modal/Error Messages
+        'error_balance_low': { km: 'សមតុល្យរបស់អ្នកមិនគ្រប់គ្រាន់ទេ! (ត្រូវការ ', en: 'Insufficient balance! (Needs ' },
+        'modal_ok': { km: 'យល់ព្រម', en: 'OK' },
+        'bet_placed': { km: 'បានដាក់ភ្នាល់', en: 'Bet placed' },
+        'on': {km: 'លើ', en: 'on'}, // Added for "Bet placed X on Y"
+        'cleared_bets_total': { km: 'បានលុបការភ្នាល់សរុប', en: 'Total bets cleared' },
+        'error_no_bet': { km: 'សូមដាក់ភ្នាល់ជាមុនសិន!', en: 'Please place a bet first!' },
+        'rolling': { km: 'កំពុងក្រឡុក...', en: 'Rolling...' },
+        'win_message': { km: 'អបអរសាទរ! អ្នកឈ្នះ', en: 'Congratulations! You win' },
+        'matched': {km: 'ត្រូវ', en: 'Matched'}, // Added for win message
+        'loss_message': { km: 'សោកស្តាយ! អ្នកចាញ់', en: 'Sorry! You lose' },
+        'draw_message': { km: 'ស្មើ! អ្នកមិនចាញ់ឬឈ្នះអ្វីទេ។', en: 'Draw! No change in balance.' },
+        'chips_new_game': { km: 'កាក។ ចុច យល់ព្រម ដើម្បីចាប់ផ្តើមលេងថ្មី!', en: 'chips. Click OK to start a new game!' },
+        'chips': { km: ' កាក', en: ' chips' },
+        'add_credit_button': { km: 'បន្ថែម កាក', en: 'Add Chips' },
+        'credit_added_message': { km: 'បានបន្ថែម', en: 'Added' }
+    };
+
+    /**
+     * Translates a key to the current language.
+     * @param {string} key - The translation key.
+     * @returns {string} The translated string.
+     */
+    function t(key) {
+        return (translations[key] && translations[key][currentLang]) || key;
+    }
+
+    /**
+     * Updates all static text elements with the current language.
+     */
+    function updateText() {
+        document.querySelectorAll('[data-i18n]').forEach(el => {
+            const key = el.getAttribute('data-i18n');
+            if (translations[key]) {
+                el.textContent = t(key);
+            }
+        });
+
+        // Update body class for font control if necessary (Bayon for KM, Inter for EN)
+        document.documentElement.lang = currentLang;
+        document.body.classList.toggle('text-khmer', currentLang === 'km');
+        
+        // Re-render betting cards to update 'Bet' label and symbol names
+        renderBettingCards();
+        // Update current message box content if it's a simple translation key
+        if (messageBox.getAttribute('data-i18n-key')) {
+             messageBox.textContent = messageBox.getAttribute('data-i18n-text');
+        } else {
+            // If no specific key, revert to initial message
+            messageBox.textContent = t('initial_message');
+        }
+        updateUI(); // Ensure bet displays are refreshed
+    }
+
+    /**
+     * Sets the application language and saves it to localStorage.
+     * @param {string} lang - 'km' or 'en'.
+     */
+    window.setLanguage = function(lang) {
+        currentLang = lang;
+        localStorage.setItem('klaklouk-lang', lang);
+        updateText();
+    }
+    
+    // --- Game Constants & State ---
+    const SYMBOLS = [
+        { name: 'ខ្លា', icon: '🐅', color: 'bg-yellow-400', iconColor: 'text-black' }, // Brighter Yellow
+        { name: 'ឃ្លោក', icon: '🍶', color: 'bg-red-500', iconColor: 'text-white' },   // Brighter Red
+        { name: 'មាន់', icon: '🐔', color: 'bg-green-400', iconColor: 'text-black' },  // Brighter Green
+        { name: 'បង្កង', icon: '🦐', color: 'bg-orange-400', iconColor: 'text-white' }, // Brighter Orange
+        { name: 'ក្តាម', icon: '🦀', color: 'bg-blue-400', iconColor: 'text-white' },   // Brighter Blue
+        { name: 'ត្រី', icon: '🐟', color: 'bg-sky-400', iconColor: 'text-black' }    // Brighter Cyan/Sky Blue
+    ];
+
+    // Game State
+    let balance = 0; 
+    let bets = {}; 
+    const INITIAL_BALANCE = 10000;
+    const MIN_BET_AMOUNT = 100;
+    const CREDIT_AMOUNT = 5000; // Amount added when "Add Credit" is clicked
+    let isRolling = false;
+
+    // DOM Elements
+    const balanceDisplay = document.getElementById('balance-display');
+    const rollButton = document.getElementById('roll-button');
+    const clearBetsButton = document.getElementById('clear-bets-button');
+    const addCreditButton = document.getElementById('add-credit-button'); // New element reference
+    const messageBox = document.getElementById('message-box');
+    const bettingGrid = document.getElementById('betting-grid');
+    const slotElements = [
+        document.getElementById('slot-1'),
+        document.getElementById('slot-2'),
+        document.getElementById('slot-3')
+    ];
+    const modalContainer = document.getElementById('modal-container');
+    const modalMessage = document.getElementById('modal-message');
+    const modalCloseButton = document.getElementById('modal-close-button');
+    const userIdDisplay = document.getElementById('user-id-display');
+
+    // --- Utility Functions ---
+
+    /**
+     * Show custom modal (replacing alert/confirm)
+     * @param {string} message - The message to display.
+     */
+    function showModal(message) {
+        modalMessage.textContent = message;
+        modalContainer.classList.remove('hidden');
+    }
+
+    modalCloseButton.onclick = () => {
+        modalContainer.classList.add('hidden');
+        // Re-set initial message on close
+        messageBox.textContent = t('initial_message');
+        messageBox.removeAttribute('data-i18n-key');
+        messageBox.removeAttribute('data-i18n-text');
+    };
+
+    // --- Firebase/Firestore Logic ---
+    const DB_COLLECTION = 'klaklouk_game';
+    const DB_DOC_ID = 'balance_doc';
+
+    function getBalanceDocRef() {
+        const { db, userId, appId, isAuthReady } = window.firebaseData || {};
+        if (!isAuthReady || !userId || !db || typeof doc === 'undefined') {
+            console.error("Firestore functions or data not ready.");
+            return null;
+        }
+        return doc(db, `artifacts/${appId}/users/${userId}/${DB_COLLECTION}/${DB_DOC_ID}`);
+    }
+
+    async function saveBalance() {
+        const docRef = getBalanceDocRef();
+        if (!docRef) return;
+        try {
+            await setDoc(docRef, { balance: balance, lastUpdated: new Date() }, { merge: true });
+            console.log("Balance saved:", balance);
+        } catch (e) {
+            console.error("Error saving document: ", e);
+        }
+    }
+
+    async function loadBalance() {
+        const docRef = getBalanceDocRef();
+        if (!docRef) return;
+        
+        try {
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                balance = data.balance || INITIAL_BALANCE;
+                console.log("Balance loaded:", balance);
+            } else {
+                balance = INITIAL_BALANCE;
+                await saveBalance(); // Save initial balance
+                console.log("Initial balance set and saved:", balance);
+            }
+        } catch (e) {
+            console.error("Error loading document: ", e);
+            balance = INITIAL_BALANCE; // Fallback to initial balance on error
+        }
+        updateUI();
+    }
+    
+    window.loadGameBalance = function() {
+        const { userId, isAuthReady } = window.firebaseData || {};
+        if (isAuthReady) {
+            userIdDisplay.textContent = userId.substring(0, 8) + '...';
+            loadBalance();
+        }
+    }
+
+    // --- Game Logic ---
+
+    function renderBettingCards() {
+        bettingGrid.innerHTML = ''; // Clear previous cards
+
+        SYMBOLS.forEach(symbol => {
+            const betAmount = bets[symbol.name] || 0;
+            const symbolTranslation = t(symbol.name); // Get translated name
+            const betLabel = t('bet_label'); // Get translated label
+
+            const cardHtml = `
+                <div id="card-${symbol.name}" 
+                     class="betting-card relative ${symbol.color} p-3 sm:p-4 rounded-xl cursor-pointer hover:ring-4 hover:ring-yellow-400 transition duration-150 card-shadow"
+                     data-symbol="${symbol.name}">
+                    <div class="absolute inset-0 bg-black opacity-20 rounded-xl pointer-events-none"></div>
+                    <div class="text-center">
+                        <div class="text-5xl sm:text-6xl mb-1">${symbol.icon}</div>
+                        <div class="text-lg font-bold text-white text-khmer">${symbolTranslation}</div>
+                        <div class="bet-display mt-1 p-1 bg-blue-900 text-yellow-300 rounded-lg text-sm sm:text-lg font-semibold border border-yellow-400">
+                            <span>${betLabel}</span>: ${betAmount.toLocaleString()} ${t('chips')}
+                        </div>
+                    </div>
+                </div>
+            `;
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = cardHtml.trim();
+            const cardElement = tempDiv.firstChild;
+
+            cardElement.addEventListener('click', () => placeBet(symbol.name));
+            bettingGrid.appendChild(cardElement);
+        });
+    }
+
+    function placeBet(symbolName) {
+        if (isRolling) return;
+        if (balance < MIN_BET_AMOUNT) {
+            showModal(t('error_balance_low') + MIN_BET_AMOUNT + t('chips'));
+            return;
+        }
+
+        balance -= MIN_BET_AMOUNT;
+        bets[symbolName] = (bets[symbolName] || 0) + MIN_BET_AMOUNT;
+        
+        updateUI();
+        const message = `${t('bet_placed')} ${MIN_BET_AMOUNT.toLocaleString()}${t('chips')} ${t('on')} ${t(symbolName)}`;
+        messageBox.textContent = message;
+        messageBox.setAttribute('data-i18n-key', 'dynamic'); // Mark as dynamic
+        messageBox.setAttribute('data-i18n-text', message);
+    }
+
+    function clearBets() {
+        if (isRolling) return;
+        let totalRefund = 0;
+        for (const key in bets) {
+            totalRefund += bets[key];
+        }
+        balance += totalRefund;
+        bets = {};
+        updateUI();
+        const message = `${t('cleared_bets_total')} ${totalRefund.toLocaleString()}${t('chips')}`;
+        messageBox.textContent = message;
+        messageBox.setAttribute('data-i18n-key', 'dynamic'); // Mark as dynamic
+        messageBox.setAttribute('data-i18n-text', message);
+    }
+    
+    window.addCredit = async function() {
+        if (isRolling) return;
+
+        balance += CREDIT_AMOUNT;
+        updateUI();
+        await saveBalance();
+
+        const message = `${t('credit_added_message')} ${CREDIT_AMOUNT.toLocaleString()}${t('chips')}`;
+        messageBox.textContent = message;
+        messageBox.setAttribute('data-i18n-key', 'dynamic'); // Mark as dynamic
+        messageBox.setAttribute('data-i18n-text', message);
+    };
+
+    function updateUI() {
+        balanceDisplay.textContent = balance.toLocaleString() + t('chips');
+        
+        // Update betting card displays
+        SYMBOLS.forEach(symbol => {
+            const cardElement = document.getElementById(`card-${symbol.name}`);
+            if (cardElement) {
+                const betAmount = bets[symbol.name] || 0;
+                const betLabel = t('bet_label');
+                cardElement.querySelector('.bet-display').innerHTML = `<span>${betLabel}</span>: ${betAmount.toLocaleString()} ${t('chips')}`;
+            }
+        });
+
+        const totalBet = Object.values(bets).reduce((sum, amount) => sum + amount, 0);
+        rollButton.disabled = isRolling || totalBet === 0;
+        clearBetsButton.disabled = isRolling || totalBet === 0;
+        addCreditButton.disabled = isRolling; // Disable adding credit while rolling
+    }
+
+    async function rollDice() {
+        const totalBet = Object.values(bets).reduce((sum, amount) => sum + amount, 0);
+        if (totalBet === 0) {
+            showModal(t('error_no_bet'));
+            return;
+        }
+
+        if (isRolling) return;
+        isRolling = true;
+        updateUI(); // Disable all buttons
+        messageBox.textContent = t('rolling');
+        messageBox.setAttribute('data-i18n-key', 'rolling');
+
+        // 1. Start the animation
+        const intervalDuration = 100;
+        let animationInterval = setInterval(() => {
+            slotElements.forEach(slot => {
+                const randomSymbol = SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)];
+                slot.querySelector('.slot-content').textContent = randomSymbol.icon;
+            });
+        }, intervalDuration);
+
+        // 2. Stop animation after a delay (e.g., 2 seconds)
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        clearInterval(animationInterval);
+
+        // 3. Determine final results
+        const results = [
+            SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)].name,
+            SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)].name,
+            SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)].name
+        ];
+        
+        // 4. Stop and display final results
+        results.forEach((resultName, index) => {
+            const symbol = SYMBOLS.find(s => s.name === resultName);
+            slotElements[index].querySelector('.slot-content').textContent = symbol.icon;
+        });
+
+        // 5. Calculate Winnings
+        let totalWinnings = 0;
+        let totalRefund = 0;
+        let resultCounts = {};
+        
+        results.forEach(name => resultCounts[name] = (resultCounts[name] || 0) + 1);
+
+        let winSymbols = [];
+
+        for (const betSymbol in bets) {
+            const betAmount = bets[betSymbol];
+            const matchCount = resultCounts[betSymbol] || 0;
+
+            if (matchCount > 0) {
+                const payout = betAmount * matchCount;
+                totalWinnings += payout;
+                totalRefund += betAmount; 
+                winSymbols.push(`${t(betSymbol)} (${matchCount}x)`);
+            }
+        }
+        
+        const netChange = (totalRefund + totalWinnings) - totalBet; 
+        balance += (totalRefund + totalWinnings);
+
+        // 6. Update UI and State
+        bets = {}; 
+        isRolling = false;
+        
+        let finalMessage = '';
+
+        // Determine message
+        if (netChange > 0) {
+            finalMessage = `${t('win_message')} ${netChange.toLocaleString()}${t('chips')}! ${t('matched')}: ${winSymbols.join(', ')}`;
+        } else if (netChange < 0) {
+            finalMessage = `${t('loss_message')} ${Math.abs(netChange).toLocaleString()}${t('chips')}។`;
+        } else {
+             finalMessage = t('draw_message');
+        }
+        messageBox.textContent = finalMessage;
+        messageBox.setAttribute('data-i18n-key', 'dynamic'); // Mark as dynamic
+        messageBox.setAttribute('data-i18n-text', finalMessage);
+
+        updateUI();
+        await saveBalance();
+
+        // Check for game over (optional: if balance is too low)
+        if (balance < MIN_BET_AMOUNT && totalBet === 0) {
+            showModal(`${t('error_balance_low')}${balance.toLocaleString()}${t('chips')}${t('chips_new_game')}`);
+            balance = INITIAL_BALANCE;
+            await saveBalance();
+        }
+    }
+
+    // --- Event Listeners and Initialization ---
+    rollButton.addEventListener('click', rollDice);
+    clearBetsButton.addEventListener('click', clearBets);
+    addCreditButton.addEventListener('click', window.addCredit);
+
+    // Initial language setup and UI render
+    setLanguage(currentLang); 
+    renderBettingCards();
+
+</script>
+
+</body>
+</html>
