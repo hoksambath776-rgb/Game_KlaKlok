@@ -1,8 +1,4 @@
-
-![Uploading Screenshot 2025-11-27 at 9.07.43 at night.png…]()
-
-
-
+<img width="707" height="685" alt="Screenshot 2025-11-27 at 9 07 43 at night" src="https://github.com/user-attachments/assets/28b9d82e-2c33-48d6-a13d-b814e3ba3d6b" />
 
 # Kla-Klouk
 គម្រោង "ខ្លាឃ្លោក" (Kla Klouk Game)  គម្រោងនេះគឺជាការបង្កើតដ៏រីករាយ សាមញ្ញ និងងាយស្រួលធ្វើ ដែលជាហ្គេម Kla Klouk ឌីជីថល (ល្បែងគ្រាប់ឡុកឡាក់ខ្មែរ)។
